@@ -1,0 +1,23 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "n_refs": 459301,
+  "n_val_asvs": 20,
+  "kernel": "custom NVRTC affine-local-SW, 1 thread/pair",
+  "scoring": {
+    "match": 2,
+    "mismatch": -3,
+    "gap_open": -5,
+    "gap_extend": -2,
+    "mode": "local"
+  },
+  "correctness_exact_match": "400/400",
+  "correctness_max_abs_diff": 0,
+  "exhaustive_wall_s": 65.92,
+  "exhaustive_gcups": 57.3,
+  "top5_md5_overlap_pct": 100.0,
+  "top1_md5_match": "20/20",
+  "cpu_exhaustive_wall_s_ref": 511.0,
+  "speedup_vs_cpu_exhaustive": 7.8,
+  "extrapolated_full_3950_exhaustive_gpu_min": 217.0,
+  "total_wall_s": 70.7
+}

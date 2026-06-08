@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+*.egg
+.installed.cfg
+
+# Packaging / build
+*.whl
+*.tar.gz
+pip-wheel-metadata/
+.pybuild/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage / type caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# CUDA / NVRTC scratch
+*.cubin
+*.ptx
+*.fatbin
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Large data / run outputs (this package ships code, not datasets)
+*.npy
+*.parquet
+*.dmp
+asv_top*_alignment_hits*.json
+gpu_exhaustive_full_stats.json
+gpu_vs_pipeline_full_comparison_per_asv.csv
