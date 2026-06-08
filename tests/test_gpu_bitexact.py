@@ -5,9 +5,9 @@ These tests require a GPU and are skipped automatically otherwise (see conftest.
 import numpy as np
 import pytest
 
-from gpusw import Matrix, Scheme, align_score
+from gpusw import Matrix, Scheme, align_pairs, align_score
 from gpusw._compile import get_module
-from gpusw.reference import cpu_reference_matrix
+from gpusw.reference import cpu_reference_matrix, cpu_reference_score
 
 pytestmark = pytest.mark.gpu
 
@@ -50,6 +50,41 @@ def test_gpu_equals_oracle_edges(name):
     gpu = align_score(queries, refs, scheme=scheme, return_ids=False)
     cpu = cpu_reference_matrix(queries, refs, scheme)
     assert np.array_equal(gpu.astype(np.int64), cpu)
+
+
+@pytest.mark.parametrize("name", list(SCHEMES))
+def test_gpu_pairs_equals_oracle(name):
+    """The separate sw_pairs kernel must be bit-exact too (1:1 and explicit pairs)."""
+    scheme, alpha = SCHEMES[name]
+    rng = np.random.default_rng((hash(name) ^ 0x5151) % 2**32)
+    queries = rand_seqs(rng, 12, 5, 28, alpha)
+    refs = rand_seqs(rng, 12, 5, 32, alpha)
+    gpu = align_pairs(queries, refs, scheme=scheme, return_ids=False)  # 1:1 zip
+    cpu = [cpu_reference_score(q, r, scheme) for q, r in zip(queries, refs, strict=True)]
+    assert gpu.astype(np.int64).tolist() == cpu
+
+
+@pytest.mark.parametrize("name", list(SCHEMES))
+def test_gpu_pairs_equals_oracle_edges(name):
+    scheme, alpha = SCHEMES[name]
+    c0 = alpha[0]
+    qs = ["", c0, c0 * 30, "".join(alpha[:4])]
+    rs = ["", c0, "".join(reversed(alpha)) * 2, c0 * 25]
+    pairs = [(i, j) for i in range(len(qs)) for j in range(len(rs))]
+    gpu = align_pairs(qs, rs, pairs=pairs, scheme=scheme, return_ids=False)
+    cpu = [cpu_reference_score(qs[i], rs[j], scheme) for i, j in pairs]
+    assert gpu.astype(np.int64).tolist() == cpu
+
+
+def test_int32_promotion_pairs_bitexact():
+    scheme = Scheme(mode="local", match=1000, mismatch=-3, gap_open=-5, gap_extend=-2)
+    qs = ["ACGT" * 15, "ACGTAC" * 5, "AAAA"]
+    rs = ["ACGT" * 15, "ACGTAC" * 5, "TTTT", "ACGT" * 15]
+    pairs = [(0, 0), (1, 1), (2, 2), (0, 3)]
+    res = align_pairs(qs, rs, pairs=pairs, scheme=scheme, return_ids=False)
+    assert res.dtype == np.int32
+    cpu = cpu_reference_matrix(qs, rs, scheme)
+    assert res.tolist() == [int(cpu[i, j]) for i, j in pairs]
 
 
 def test_int32_promotion_bitexact():

@@ -46,6 +46,7 @@ def test_align_pairs_explicit():
     res = align_pairs(list(QUERIES.values()), list(REFS.values()),
                       pairs=[(0, 0), (0, 3), (2, 3)], scheme="dna", return_ids=False)
     assert res.shape == (3,)
+    assert res.tolist() == [24, 13, 16]  # value-verified vs the CPU oracle
 
 
 def test_align_pairs_length_mismatch_raises():

@@ -94,3 +94,42 @@ def test_empty_sequences_ok():
     e = funnel(["", "ACGT", ""], DNA)
     assert e.lengths.tolist() == [0, 4, 0]
     assert e.offsets.tolist() == [0, 0, 4, 4]
+
+
+def test_non_ascii_bytes_preserved_to_sentinel():
+    # 0xFF must NOT be dropped: length is preserved and the byte maps to the sentinel
+    e = funnel(b"ACG\xffT", DNA)
+    assert e.lengths.tolist() == [5]
+    assert _codes(e, 0) == [0, 1, 2, 4, 3]  # sentinel = 4
+
+
+def test_non_ascii_str_no_crash_and_sentinel():
+    # a non-ASCII unicode char must not desync lengths/codes (no broadcast crash)
+    e = funnel(["ACGµT"], DNA)
+    assert e.lengths.tolist() == [5]
+    assert _codes(e, 0)[3] == 4  # 'µ' -> sentinel
+
+
+def test_unknown_error_catches_non_ascii_byte():
+    with pytest.raises(EncodeError):
+        funnel(b"ACG\xffT", Scheme(mode="local", unknown="error"))
+
+
+def test_missing_fasta_path_raises():
+    with pytest.raises(FileNotFoundError):
+        read_fasta("/no/such/file.fasta")
+
+
+def test_mistyped_path_in_funnel_raises():
+    with pytest.raises(EncodeError):
+        funnel("nonexistent_refs.fasta", DNA)
+
+
+def test_preencoded_bad_offsets_raise():
+    codes = np.array([0, 1, 2, 3], dtype=np.uint8)
+    with pytest.raises(EncodeError):  # offsets[-1] > len(codes)
+        funnel((codes, np.array([0, 4, 1000], dtype=np.int32)), DNA)
+    with pytest.raises(EncodeError):  # negative
+        funnel((codes, np.array([0, -1, 4], dtype=np.int32)), DNA)
+    with pytest.raises(EncodeError):  # non-monotonic
+        funnel((codes, np.array([0, 4, 2], dtype=np.int32)), DNA)

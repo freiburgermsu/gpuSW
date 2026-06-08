@@ -49,3 +49,6 @@ htmlcov/
 asv_top*_alignment_hits*.json
 gpu_exhaustive_full_stats.json
 gpu_vs_pipeline_full_comparison_per_asv.csv
+
+# uv (dev environment lock; gpusw deps live in pyproject.toml)
+uv.lock

@@ -28,8 +28,10 @@ _NEG = -(1 << 30)
 
 
 def _encode(seq: str, scheme, lut) -> np.ndarray:
+    if isinstance(seq, (bytes, bytearray)):
+        seq = bytes(seq).decode("latin-1")
     s = seq.upper() if scheme.case_insensitive else seq
-    raw = np.frombuffer(s.encode("ascii", "ignore"), dtype=np.uint8)
+    raw = np.frombuffer(s.encode("latin-1", "replace"), dtype=np.uint8)
     return lut[raw].astype(np.int64)
 
 

@@ -79,13 +79,29 @@ class Encoded:
         return int(self.lengths.max()) if self.n else 0
 
 
+# file extensions that mark a string as a *path* (so a typo'd path is an error, not a seq)
+_SEQ_EXTS = (".fasta", ".fa", ".fna", ".faa", ".ffn", ".fastq", ".fq", ".txt", ".gz")
+
+
+def _looks_like_path(s: str) -> bool:
+    """Heuristic: does this string denote a file path rather than a raw sequence?"""
+    return ("/" in s) or (os.sep in s) or s.lower().endswith(_SEQ_EXTS)
+
+
 def read_fasta(path_or_text) -> list[tuple[str, str]]:
-    """Parse FASTA from a file path (``.gz`` ok) or raw text → ``[(id, seq), ...]``."""
+    """Parse FASTA from a file path (``.gz`` ok) or raw text → ``[(id, seq), ...]``.
+
+    Raises :class:`FileNotFoundError` if a path-like string does not exist (so a
+    mistyped filename is a clear error rather than a silently-empty result).
+    """
     if isinstance(path_or_text, (str, os.PathLike)) and os.path.exists(path_or_text):
         opener = gzip.open if str(path_or_text).endswith(".gz") else open
         with opener(path_or_text, "rt") as fh:
             text = fh.read()
     else:
+        s = str(path_or_text)
+        if not s.lstrip().startswith(">") and _looks_like_path(s):
+            raise FileNotFoundError(f"FASTA file not found: {path_or_text}")
         text = path_or_text
     recs: list[tuple[str, str]] = []
     cur_id, buf = None, []
@@ -111,11 +127,15 @@ def _to_pairs(obj, id_prefix: str) -> list[tuple[str, str]]:
     if isinstance(obj, dict):
         return [(str(k), str(v)) for k, v in obj.items()]
     if isinstance(obj, (bytes, bytearray)):
-        return [(f"{id_prefix}0", obj.decode("ascii", "ignore"))]
+        # latin-1 is a lossless 1:1 byte->codepoint map (no bytes dropped); any byte
+        # outside the alphabet then maps to the sentinel via the 256-entry LUT.
+        return [(f"{id_prefix}0", bytes(obj).decode("latin-1"))]
     if isinstance(obj, str):
-        # FASTA file path, FASTA text, or a single raw sequence
-        if os.path.exists(obj) or obj.lstrip().startswith(">"):
+        # FASTA file path, FASTA text, mistyped path, or a single raw sequence
+        if obj.lstrip().startswith(">") or os.path.exists(obj):
             return read_fasta(obj)
+        if _looks_like_path(obj):
+            raise EncodeError(f"file not found: {obj!r}")
         return [(f"{id_prefix}0", obj)]
     if isinstance(obj, np.ndarray):
         obj = obj.tolist()
@@ -160,6 +180,17 @@ def funnel(obj, scheme, *, id_prefix: str = "q") -> Encoded:
     ):
         codes = np.ascontiguousarray(obj[0], dtype=np.uint8)
         offsets = np.ascontiguousarray(obj[1], dtype=np.int32)
+        if offsets.size == 0:
+            raise EncodeError("pre-encoded offsets must have length n+1 (>= 1)")
+        if (offsets < 0).any():
+            raise EncodeError("pre-encoded offsets must be non-negative")
+        if (np.diff(offsets) < 0).any():
+            raise EncodeError("pre-encoded offsets must be non-decreasing")
+        if int(offsets[-1]) > codes.size:
+            raise EncodeError(
+                f"pre-encoded offsets[-1]={int(offsets[-1])} exceeds len(codes)="
+                f"{codes.size}; offsets must index within the codes buffer"
+            )
         n = len(offsets) - 1
         ids = list(obj[2]) if len(obj) == 3 else [f"{id_prefix}{i}" for i in range(n)]
         lengths = np.diff(offsets).astype(np.int32)
@@ -168,21 +199,22 @@ def funnel(obj, scheme, *, id_prefix: str = "q") -> Encoded:
     pairs = _to_pairs(obj, id_prefix)
     lut, sentinel = build_lut(scheme)
     ids = [p[0] for p in pairs]
-    n = len(pairs)
-    lengths = np.fromiter((len(p[1]) for p in pairs), dtype=np.int32, count=n)
-    offsets = np.zeros(n + 1, dtype=np.int32)
-    np.cumsum(lengths, out=offsets[1:])
-    total = int(offsets[-1])
-    codes = np.empty(total, dtype=np.uint8)
-    for i, (_, seq) in enumerate(pairs):
+    # encode each sequence first, then derive lengths/offsets from the ACTUAL encoded
+    # arrays — robust to case folding or encoding that changes the byte count.
+    enc_list: list[np.ndarray] = []
+    for ident, seq in pairs:
         s = seq.upper() if scheme.case_insensitive else seq
-        raw = np.frombuffer(s.encode("ascii", "ignore"), dtype=np.uint8)
+        raw = np.frombuffer(s.encode("latin-1", "replace"), dtype=np.uint8)
         enc = lut[raw]
         if scheme.unknown == "error" and enc.size and (enc == sentinel).any():
-            bad = bytes(raw[enc == sentinel][:1]).decode("ascii", "ignore")
+            bad = bytes(raw[enc == sentinel][:1]).decode("latin-1")
             raise EncodeError(
-                f"sequence {ids[i]!r} contains out-of-alphabet symbol {bad!r} "
+                f"sequence {ident!r} contains out-of-alphabet symbol {bad!r} "
                 f"(alphabet={scheme.eff_alphabet!r}); set unknown='mismatch' or 'zero'"
             )
-        codes[offsets[i] : offsets[i + 1]] = enc
+        enc_list.append(enc)
+    lengths = np.fromiter((e.size for e in enc_list), dtype=np.int32, count=len(enc_list))
+    offsets = np.zeros(len(enc_list) + 1, dtype=np.int32)
+    np.cumsum(lengths, out=offsets[1:])
+    codes = (np.concatenate(enc_list) if enc_list else np.zeros(0, np.uint8)).astype(np.uint8)
     return Encoded(codes, offsets, ids, lengths, scheme.eff_alphabet)

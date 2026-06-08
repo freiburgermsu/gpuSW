@@ -70,7 +70,7 @@ def _cmd_topk(args) -> int:
     rs = read_fasta(args.refs)
     al = Aligner(_build_scheme(**_scheme_kw(args)), threads=args.threads)
     al.index(rs).set_queries(qs)
-    res = al.top_k(args.k)
+    res = al.top_k(k=args.k)
     fh, w = _writer(args.out)
     w.writerow(["query", "rank", "reference", "score"])
     for qid, hits in res.top_k(args.k):

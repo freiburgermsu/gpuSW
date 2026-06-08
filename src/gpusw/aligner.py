@@ -168,7 +168,7 @@ class Aligner:
             return AlignResult(host, qids, rids, self.scheme)
         return host
 
-    def top_k(self, k: int = 5, *, queries=None, query_batch: int = 512) -> AlignResult:
+    def top_k(self, queries=None, k: int = 5, *, query_batch: int = 512) -> AlignResult:
         """Per-query top-``k`` references by score (argpartition on the GPU).
 
         Memory-bounded: only the per-query top-``k`` is kept on the host, so this
