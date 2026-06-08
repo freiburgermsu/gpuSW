@@ -1,5 +1,11 @@
 # GPU-accelerated alignment scoring — design, test, and findings
 
+> **Provenance.** These are the original design notes and on-box validation for the 16S
+> ASV → BV-BRC kernel that the `gpusw` package was extracted and generalized from. They are
+> kept for reference; file names below (`gpu_align.py`, `gpu_align_stats.json`) refer to the
+> original prFBA layout (now `examples/legacy_16s_gpu_align.py` and
+> `docs/gpu_align_stats_16s.json`). For the general design see [DESIGN.md](DESIGN.md).
+
 **Goal.** Add a GPU tier to the 16S ASV → BV-BRC alignment mapping as a *final accuracy/throughput
 enhancement*, evaluating both purpose-built tools (MMseqs2-GPU, CUDASW++4.0 — the CUDASW++4.0 engine
 that MMseqs2-GPU, *Nature Methods* 2025, is built on) and a custom kernel.

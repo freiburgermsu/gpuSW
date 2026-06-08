@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: lint + CPU tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (no GPU)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,pandas]" ruff
+      - name: Lint
+        run: ruff check src tests
+      - name: CPU tests (oracle vs Biopython, encoding, dtype, rendering)
+        run: pytest -m "not gpu" -q
+
+  build:
+    name: build + twine check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+      - name: Check metadata and that matrices are packaged
+        run: |
+          python -m twine check dist/*
+          python - <<'PY'
+          import glob, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          mats = [n for n in names if "data/matrices" in n and n.endswith(".txt")]
+          assert mats, "bundled substitution matrices missing from the wheel!"
+          print(f"OK: {len(mats)} matrices packaged in {whl}")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*

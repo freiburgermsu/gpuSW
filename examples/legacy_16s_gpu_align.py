@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 """
+PROVENANCE / LEGACY — this is the original, domain-specific (16S ASV -> BV-BRC) driver
+that the gpusw package was generalized from, preserved verbatim for reference. It imports
+`edlib_biopython_hits` and reads prFBA/EmilyKin data files that are NOT part of this
+package, so it is NOT runnable here. For the generalized, installable API use the `gpusw`
+package (see ../README.md and examples/dna_exhaustive.py).
+
 gpu_align.py — GPU-accelerated Smith-Waterman local-alignment SCORING of 16S ASVs
 against the BV-BRC reference set, via a custom CUDA kernel compiled at runtime with
 CuPy/NVRTC (no nvcc, no CUDA toolkit; runs on the RTX 5070 Ti / sm_120).

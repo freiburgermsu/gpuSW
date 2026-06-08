@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gpusw"
+dynamic = ["version"]
+description = "GPU-accelerated Smith-Waterman / Needleman-Wunsch alignment scoring via runtime-compiled CUDA (CuPy/NVRTC, no nvcc)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Andrew Freiburger", email = "andrewfreiburger2027@u.northwestern.edu" }]
+keywords = [
+    "smith-waterman",
+    "needleman-wunsch",
+    "sequence-alignment",
+    "gpu",
+    "cuda",
+    "cupy",
+    "nvrtc",
+    "bioinformatics",
+    "blosum",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = ["numpy>=1.23"]
+
+[project.optional-dependencies]
+# CuPy is intentionally NOT a hard dependency: the cuda11x / cuda12x / cuda13x wheels
+# are mutually exclusive, so the user picks the one matching their CUDA major version.
+cuda13 = ["cupy-cuda13x>=13.0"]
+cuda12 = ["cupy-cuda12x>=12.0"]
+cuda11 = ["cupy-cuda11x>=11.0"]
+pandas = ["pandas>=1.5"]
+test = ["pytest>=7", "biopython>=1.81"]
+dev = ["gpusw[test,pandas]", "ruff>=0.6", "build>=1.2", "twine>=5.0"]
+
+[project.scripts]
+gpusw = "gpusw.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/freiburgermsu/gpuSW"
+Repository = "https://github.com/freiburgermsu/gpuSW"
+Issues = "https://github.com/freiburgermsu/gpuSW/issues"
+
+[tool.hatch.version]
+path = "src/gpusw/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gpusw"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src",
+    "tests",
+    "examples",
+    "benchmarks",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E741"]  # ambiguous names (i, l) are fine in DP/index code
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]              # inline test fixtures / parametrize ids may be long
+"examples/legacy_16s_gpu_align.py" = ["E501", "E741", "B", "UP", "F"]  # preserved verbatim
+
+[tool.pytest.ini_options]
+markers = ["gpu: tests that require a CUDA GPU + CuPy"]
+testpaths = ["tests"]
