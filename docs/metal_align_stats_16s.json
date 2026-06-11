@@ -1,0 +1,30 @@
+{
+  "machine": "Apple M4 (10-core GPU, 16 GB unified)",
+  "device": "Apple M4",
+  "backend": "metal",
+  "kernel": "custom runtime-MSL affine-local-SW, 1 thread/pair (gpusw)",
+  "scheme": {
+    "mode": "local",
+    "match": 2,
+    "mismatch": -3,
+    "gap_open": -5,
+    "gap_extend": -2,
+    "note": "identical to EmilyKin edlib_biopython_hits.py CPU pipeline"
+  },
+  "n_asvs": 3950,
+  "n_refs": 343,
+  "max_asv_len": 561,
+  "dtype": "int16",
+  "correctness_pairs": 400,
+  "correctness_exact_match": "400/400",
+  "correctness_max_abs_diff": 0,
+  "exhaustive_pairs": 1354850,
+  "exhaustive_cells_T": 0.7657,
+  "exhaustive_wall_s": 50.86,
+  "exhaustive_gcups": 15.1,
+  "topk": 5,
+  "topk_sample_asvs": 25,
+  "topk_overlap_pct": 100.0,
+  "topk_top1_match": "25/25",
+  "total_wall_s": 66.7
+}

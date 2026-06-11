@@ -1,0 +1,26 @@
+{
+  "machine": "Apple M4 (10-core GPU, 16 GB unified)",
+  "device": "Apple M4",
+  "backend": "metal",
+  "what": "Metal GPU scores vs EmilyKin PRECOMPUTED CPU (Biopython) align_score \u2014 no CPU recompute",
+  "scheme": {
+    "mode": "local",
+    "match": 2,
+    "mismatch": -3,
+    "gap_open": -5,
+    "gap_extend": -2,
+    "alphabet": "ACGNT",
+    "note": "match/mismatch over observed alphabet == Biopython char-equality"
+  },
+  "validation_asvs": 20,
+  "total_top5_hits": 100,
+  "refs_needed": 100,
+  "refs_recovered_from_bvbrc": 100,
+  "hits_covered": 100,
+  "hits_uncovered": 0,
+  "md5_confirmed_sequences": "100/100",
+  "exact_score_match": "100/100",
+  "max_abs_diff": 0,
+  "per_asv_top1_agree": "20/20",
+  "scan_wall_s": 2.0
+}

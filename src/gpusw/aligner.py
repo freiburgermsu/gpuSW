@@ -1,17 +1,18 @@
 """The reusable GPU engine: encode/upload references once, then score many query
-sets against them with ``score_cross`` / ``score_pairs`` / ``top_k``.
+sets against them with ``score_cross`` / ``score_pairs`` / ``top_k`` — on **either**
+GPU backend (NVIDIA/CUDA or Apple/Metal) behind one API.
 
-CuPy is imported lazily through :mod:`gpusw._compile`; constructing an ``Aligner`` is
-cheap, and the kernel is compiled on first launch (when query/reference lengths — and
-thus ``MAXQ`` and the int16/int32 choice — are known).
+The device is reached only through a :class:`~gpusw.backends.Backend` (CUDA via
+CuPy/NVRTC, Metal via PyObjC), so this engine names no GPU API directly. Constructing an
+``Aligner`` is cheap and GPU-free; the backend is resolved (and the kernel compiled) on
+the first scoring call, when query/reference lengths — and thus ``MAXQ`` and the
+int16/int32 choice — are known.
 """
 from __future__ import annotations
 
-import time
-
 import numpy as np
 
-from . import _compile
+from .backends import resolve_backend
 from .encode import Encoded, funnel
 from .result import AlignResult
 from .scheme import Scheme
@@ -35,41 +36,54 @@ class Aligner:
     scheme:
         A :class:`~gpusw.Scheme` or a preset name (e.g. ``"dna"``, ``"blosum62"``).
     threads:
-        CUDA block size (threads per block). Default 128.
+        Threads per block (CUDA) / per threadgroup (Metal). Default 128.
     device:
-        CUDA device ordinal.
+        Device ordinal (CUDA). Metal uses the single default system device.
+    backend:
+        ``"auto"`` (prefer CUDA, else Metal), ``"cuda"``, or ``"metal"``.
     """
 
-    def __init__(self, scheme="dna", *, threads: int = 128, device: int = 0):
+    def __init__(self, scheme="dna", *, threads: int = 128, device: int = 0,
+                 backend: str = "auto"):
         self.scheme = _as_scheme(scheme)
         self.threads = int(threads)
         self.device = int(device)
+        self._backend_name = backend
+        self._backend = None
         self._refs: Encoded | None = None
         self._queries: Encoded | None = None
         self._d_rbuf = self._d_roff = None
         self._d_qbuf = self._d_qoff = None
         self._last_gcups = 0.0
         self._last_source = ""
+        self._last_backend_name = ""
+
+    @property
+    def _b(self):
+        """Resolve (once) and return the active backend."""
+        if self._backend is None:
+            self._backend = resolve_backend(self._backend_name)
+        return self._backend
 
     # ----------------------------------------------------------------- inputs
     def index(self, refs) -> Aligner:
         """Encode and upload the reference set once; returns ``self`` for chaining."""
-        cp = _compile.require_cupy()
-        with cp.cuda.Device(self.device):
+        b = self._b
+        with b.device_scope(self.device):
             enc = funnel(refs, self.scheme, id_prefix="r")
             self._refs = enc
-            self._d_rbuf = cp.asarray(enc.codes)
-            self._d_roff = cp.asarray(enc.offsets)
+            self._d_rbuf = b.upload(enc.codes)
+            self._d_roff = b.upload(enc.offsets)
         return self
 
     def set_queries(self, queries) -> Aligner:
         """Encode and upload a query set; returns ``self`` for chaining."""
-        cp = _compile.require_cupy()
-        with cp.cuda.Device(self.device):
+        b = self._b
+        with b.device_scope(self.device):
             enc = funnel(queries, self.scheme, id_prefix="q")
             self._queries = enc
-            self._d_qbuf = cp.asarray(enc.codes)
-            self._d_qoff = cp.asarray(enc.offsets)
+            self._d_qbuf = b.upload(enc.codes)
+            self._d_qoff = b.upload(enc.offsets)
         return self
 
     # ------------------------------------------------------------- internals
@@ -78,32 +92,22 @@ class Aligner:
         maxr = self._refs.max_len if self._refs else 0
         return self.scheme.resolve_dtype(max(maxq, 1), max(maxr, 1))
 
-    def _store_dtype(self, cp, dtype: str):
-        return cp.int16 if dtype == "int16" else cp.int32
-
-    def _launch_cross(self, cp, qlist_dev, nq: int):
-        """Score ``qlist`` (query indices) against all indexed refs → cp (nq, nr)."""
+    def _launch_cross(self, qlist_host, nq: int):
+        """Score ``qlist`` (query indices) against all indexed refs → native (nq, nr)."""
         nr = self._refs.n
         dtype = self._resolved_dtype()
         maxq = self._queries.max_len
-        _, fcross, _, src = _compile.get_module(self.scheme, maxq, dtype)
+        scores, dt, src = self._b.run_cross(
+            self.scheme, maxq, dtype, self.threads,
+            self._d_qbuf, self._d_qoff, self._d_rbuf, self._d_roff,
+            qlist_host, nq, nr,
+        )
         self._last_source = src
-        sub = _compile.get_sub(self.scheme)
-        out = cp.empty(nq * nr, dtype=self._store_dtype(cp, dtype))
-        total = nq * nr
-        thr = self.threads
-        grid = ((total + thr - 1) // thr,)
-        cp.cuda.runtime.deviceSynchronize()
-        t0 = time.perf_counter()
-        fcross(grid, (thr,),
-               (self._d_qbuf, self._d_qoff, self._d_rbuf, self._d_roff,
-                qlist_dev, np.int32(nq), np.int32(nr), out, sub))
-        cp.cuda.runtime.deviceSynchronize()
-        dt = time.perf_counter() - t0
-        qlen = int(self._queries.lengths[cp.asnumpy(qlist_dev)].sum())
+        self._last_backend_name = self._b.name
+        qlen = int(self._queries.lengths[np.asarray(qlist_host)].sum())
         cells = qlen * int(self._refs.lengths.sum())
         self._last_gcups = cells / dt / 1e9 if dt > 0 else 0.0
-        return out.reshape(nq, nr)
+        return scores
 
     # --------------------------------------------------------------- scoring
     def score_cross(self, queries=None, *, return_ids: bool = False,
@@ -114,7 +118,6 @@ class Aligner:
         :class:`~gpusw.AlignResult` if ``return_ids=True``). ``query_batch`` chunks the
         queries to bound device memory for very large cross products.
         """
-        cp = _compile.require_cupy()
         if self._refs is None:
             raise ValueError("call index(refs) before score_cross()")
         if queries is not None:
@@ -122,20 +125,23 @@ class Aligner:
         if self._queries is None:
             raise ValueError("no queries: pass queries= or call set_queries()")
         nq, nr = self._queries.n, self._refs.n
-        with cp.cuda.Device(self.device):
+        # never request more threads than the backend can index in one launch (Metal's
+        # grid index is 32-bit); CUDA's cap is effectively unbounded, so its default
+        # single-launch behavior is unchanged.
+        cap_rows = max(1, self._b.max_threads_per_launch // max(nr, 1))
+        with self._b.device_scope(self.device):
             out = np.empty((nq, nr), dtype=np.int32)
-            step = query_batch or nq
-            for b0 in range(0, nq, max(step, 1)):
+            step = max(1, min(query_batch or nq, cap_rows))
+            for b0 in range(0, nq, step):
                 qb = np.arange(b0, min(b0 + step, nq), dtype=np.int32)
-                dev = self._launch_cross(cp, cp.asarray(qb), len(qb))
-                out[b0:b0 + len(qb)] = cp.asnumpy(dev).astype(np.int32)
+                scores = self._launch_cross(qb, len(qb))
+                out[b0:b0 + len(qb)] = self._b.as_host(scores)
         if return_ids:
             return AlignResult(out, self._queries.ids, self._refs.ids, self.scheme)
         return out
 
     def score_pairs(self, qi, rj, *, return_ids: bool = False):
         """Score the explicit index pairs ``(qi[k], rj[k])`` → ``(n_pairs,)`` int32."""
-        cp = _compile.require_cupy()
         if self._refs is None or self._queries is None:
             raise ValueError("call index(refs) and set_queries(queries) first")
         qi = np.ascontiguousarray(qi, dtype=np.int32)
@@ -144,24 +150,16 @@ class Aligner:
             raise ValueError("qi and rj must have the same length")
         n = int(qi.shape[0])
         dtype = self._resolved_dtype()
-        _, _, fpairs, src = _compile.get_module(self.scheme, self._queries.max_len, dtype)
+        with self._b.device_scope(self.device):
+            host, dt, src = self._b.run_pairs(
+                self.scheme, self._queries.max_len, dtype, self.threads,
+                self._d_qbuf, self._d_qoff, self._d_rbuf, self._d_roff, qi, rj, n,
+            )
         self._last_source = src
-        sub = _compile.get_sub(self.scheme)
-        with cp.cuda.Device(self.device):
-            out = cp.empty(n, dtype=self._store_dtype(cp, dtype))
-            thr = self.threads
-            grid = ((n + thr - 1) // thr,)
-            cp.cuda.runtime.deviceSynchronize()
-            t0 = time.perf_counter()
-            fpairs(grid, (thr,),
-                   (self._d_qbuf, self._d_qoff, self._d_rbuf, self._d_roff,
-                    cp.asarray(qi), cp.asarray(rj), np.int32(n), out, sub))
-            cp.cuda.runtime.deviceSynchronize()
-            dt = time.perf_counter() - t0
-            cells = int((self._queries.lengths[qi].astype(np.int64)
-                         * self._refs.lengths[rj].astype(np.int64)).sum())
-            self._last_gcups = cells / dt / 1e9 if dt > 0 else 0.0
-            host = cp.asnumpy(out).astype(np.int32)
+        self._last_backend_name = self._b.name
+        cells = int((self._queries.lengths[qi].astype(np.int64)
+                     * self._refs.lengths[rj].astype(np.int64)).sum())
+        self._last_gcups = cells / dt / 1e9 if dt > 0 else 0.0
         if return_ids:
             qids = [self._queries.ids[i] for i in qi]
             rids = [self._refs.ids[j] for j in rj]
@@ -169,12 +167,11 @@ class Aligner:
         return host
 
     def top_k(self, queries=None, k: int = 5, *, query_batch: int = 512) -> AlignResult:
-        """Per-query top-``k`` references by score (argpartition on the GPU).
+        """Per-query top-``k`` references by score (partition on the device/host).
 
         Memory-bounded: only the per-query top-``k`` is kept on the host, so this
         scales to reference sets too large to materialise the full score matrix.
         """
-        cp = _compile.require_cupy()
         if self._refs is None:
             raise ValueError("call index(refs) before top_k()")
         if queries is not None:
@@ -183,24 +180,26 @@ class Aligner:
             raise ValueError("no queries: pass queries= or call set_queries()")
         nq, nr = self._queries.n, self._refs.n
         kk = min(k, nr)
+        cap_rows = max(1, self._b.max_threads_per_launch // max(nr, 1))
+        qbatch = max(1, min(query_batch, cap_rows))
         idx_out = np.empty((nq, kk), dtype=np.int32)
         sc_out = np.empty((nq, kk), dtype=np.int32)
-        with cp.cuda.Device(self.device):
-            for b0 in range(0, nq, query_batch):
-                qb = np.arange(b0, min(b0 + query_batch, nq), dtype=np.int32)
-                dev = self._launch_cross(cp, cp.asarray(qb), len(qb))  # (len(qb), nr)
-                part = cp.argpartition(-dev, kk - 1, axis=1)[:, :kk] if kk < nr else \
-                    cp.broadcast_to(cp.arange(nr), (len(qb), nr)).copy()
-                psc = cp.take_along_axis(dev, part, axis=1)
-                order = cp.argsort(-psc, axis=1, kind="stable")
-                part = cp.take_along_axis(part, order, axis=1)
-                psc = cp.take_along_axis(psc, order, axis=1)
-                idx_out[b0:b0 + len(qb)] = cp.asnumpy(part).astype(np.int32)
-                sc_out[b0:b0 + len(qb)] = cp.asnumpy(psc).astype(np.int32)
+        with self._b.device_scope(self.device):
+            for b0 in range(0, nq, qbatch):
+                qb = np.arange(b0, min(b0 + qbatch, nq), dtype=np.int32)
+                scores = self._launch_cross(qb, len(qb))  # native (len(qb), nr)
+                idx, sc = self._b.topk(scores, kk)
+                idx_out[b0:b0 + len(qb)] = idx
+                sc_out[b0:b0 + len(qb)] = sc
         return AlignResult(None, self._queries.ids, self._refs.ids, self.scheme,
                            topk_idx=idx_out, topk_scores=sc_out)
 
     # ------------------------------------------------------------ introspection
+    @property
+    def backend(self) -> str:
+        """Name of the active backend (``"cuda"`` or ``"metal"``); resolves ``"auto"``."""
+        return self._b.name
+
     @property
     def query_ids(self) -> list[str]:
         return list(self._queries.ids) if self._queries else []
@@ -214,11 +213,30 @@ class Aligner:
         """Throughput (giga cell-updates per second) of the most recent launch."""
         return self._last_gcups
 
+    def _intro_maxq(self) -> int:
+        return self._queries.max_len if self._queries else 256
+
+    def _intro_dtype(self) -> str:
+        return self._resolved_dtype() if (self._queries and self._refs) else "int32"
+
     def cuda_source(self) -> str:
-        """The generated CUDA source of the most recently launched kernel."""
+        """The generated **CUDA** C++ source for this scheme (NVIDIA backend)."""
+        if self._last_source and self._last_backend_name == "cuda":
+            return self._last_source
+        from .backends.cuda import CudaBackend
+
+        return CudaBackend().render(self.scheme, self._intro_maxq(), self._intro_dtype())
+
+    def metal_source(self) -> str:
+        """The generated **Metal Shading Language** source for this scheme (Apple backend)."""
+        if self._last_source and self._last_backend_name == "metal":
+            return self._last_source
+        from .backends.metal import MetalBackend
+
+        return MetalBackend().render(self.scheme, self._intro_maxq(), self._intro_dtype())
+
+    def kernel_source(self) -> str:
+        """The kernel source last launched, else rendered for the active backend."""
         if self._last_source:
             return self._last_source
-        maxq = self._queries.max_len if self._queries else 256
-        from .kernel import render_source
-        return render_source(self.scheme.module_fields(), _compile.bucket_maxq(maxq),
-                             self._resolved_dtype() if self._queries and self._refs else "int32")
+        return self._b.render(self.scheme, self._intro_maxq(), self._intro_dtype())

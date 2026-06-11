@@ -16,8 +16,10 @@ from . import (
     _build_scheme,
     align_pairs,
     align_score,
+    available_backends,
     available_matrices,
     gpu_available,
+    metal_available,
 )
 from .aligner import Aligner
 from .encode import read_fasta
@@ -35,6 +37,8 @@ def _scoring_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--gap-extend", type=int, default=None, dest="gap_extend")
     p.add_argument("--dtype", choices=["auto", "int16", "int32"], default=None)
     p.add_argument("--threads", type=int, default=128)
+    p.add_argument("--backend", choices=["auto", "cuda", "metal"], default="auto",
+                   help="GPU backend: auto (prefer CUDA, else Metal), cuda, or metal")
     p.add_argument("--out", "-o", default="-", help="output CSV path ('-' = stdout)")
 
 
@@ -54,7 +58,7 @@ def _writer(path):
 def _cmd_cross(args) -> int:
     qs = read_fasta(args.queries)
     rs = read_fasta(args.refs)
-    res = align_score(qs, rs, threads=args.threads, **_scheme_kw(args))
+    res = align_score(qs, rs, threads=args.threads, backend=args.backend, **_scheme_kw(args))
     fh, w = _writer(args.out)
     w.writerow(["query", "reference", "score"])
     for qi, qid in enumerate(res.query_ids):
@@ -68,7 +72,7 @@ def _cmd_cross(args) -> int:
 def _cmd_topk(args) -> int:
     qs = read_fasta(args.queries)
     rs = read_fasta(args.refs)
-    al = Aligner(_build_scheme(**_scheme_kw(args)), threads=args.threads)
+    al = Aligner(_build_scheme(**_scheme_kw(args)), threads=args.threads, backend=args.backend)
     al.index(rs).set_queries(qs)
     res = al.top_k(k=args.k)
     fh, w = _writer(args.out)
@@ -85,7 +89,7 @@ def _cmd_topk(args) -> int:
 def _cmd_pairs(args) -> int:
     qs = read_fasta(args.queries)
     rs = read_fasta(args.refs)
-    res = align_pairs(qs, rs, threads=args.threads, **_scheme_kw(args))
+    res = align_pairs(qs, rs, threads=args.threads, backend=args.backend, **_scheme_kw(args))
     fh, w = _writer(args.out)
     w.writerow(["query", "reference", "score"])
     for k, sc in enumerate(res.scores):
@@ -97,12 +101,18 @@ def _cmd_pairs(args) -> int:
 
 def _cmd_info(_args) -> int:
     print(f"gpusw {__version__}")
-    print(f"GPU available: {gpu_available()}")
+    backends = available_backends()
+    avail = ", ".join(backends) if backends else "none (CPU oracle only)"
+    print(f"GPU backends available: {avail}")
     if gpu_available():
         import cupy as cp
 
-        print(f"device: {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
-        print(f"compute capability: {cp.cuda.Device().compute_capability}")
+        print(f"  cuda device: {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
+        print(f"  cuda compute capability: {cp.cuda.Device().compute_capability}")
+    if metal_available():
+        from ._metal import device
+
+        print(f"  metal device: {device().name()}")
     print("bundled matrices:", ", ".join(sorted(available_matrices())))
     return 0
 

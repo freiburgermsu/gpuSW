@@ -60,7 +60,8 @@ def get_module(scheme, maxq: int, dtype: str):
     store_bytes = 2 if dtype == "int16" else 4
     need = 2 * (mq + 1) * store_bytes
     if need > _LOCALMEM_BUDGET:
-        cap = _LOCALMEM_BUDGET // (2 * store_bytes) - 1
+        # largest query length whose 128-aligned MAXQ bucket still fits the budget
+        cap = ((_LOCALMEM_BUDGET // (2 * store_bytes)) - 1) // 128 * 128
         raise GpuSWError(
             f"query too long for the one-thread-per-pair kernel: MAXQ bucket {mq} needs "
             f"{need} bytes/thread of local memory (> {_LOCALMEM_BUDGET // 1024} KiB). "

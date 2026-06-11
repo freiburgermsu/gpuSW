@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "gpusw"
 dynamic = ["version"]
-description = "GPU-accelerated Smith-Waterman / Needleman-Wunsch alignment scoring via runtime-compiled CUDA (CuPy/NVRTC, no nvcc)"
+description = "GPU-accelerated Smith-Waterman / Needleman-Wunsch alignment scoring via a kernel compiled at runtime — CUDA (CuPy/NVRTC, no nvcc) on NVIDIA or Metal (PyObjC, no Xcode) on Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -19,6 +19,8 @@ keywords = [
     "cuda",
     "cupy",
     "nvrtc",
+    "metal",
+    "apple-silicon",
     "bioinformatics",
     "blosum",
 ]
@@ -35,6 +37,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
 ]
 dependencies = ["numpy>=1.23"]
 
@@ -44,6 +47,12 @@ dependencies = ["numpy>=1.23"]
 cuda13 = ["cupy-cuda13x>=13.0"]
 cuda12 = ["cupy-cuda12x>=12.0"]
 cuda11 = ["cupy-cuda11x>=11.0"]
+# Metal backend (Apple Silicon, macOS): the runtime MSL compiler ships in the OS Metal
+# framework, so — like NVRTC for CUDA — no Xcode/offline toolchain is needed, only PyObjC.
+metal = [
+    "pyobjc-framework-Metal>=10.0 ; sys_platform == 'darwin'",
+    "pyobjc-framework-libdispatch>=10.0 ; sys_platform == 'darwin'",
+]
 pandas = ["pandas>=1.5"]
 test = ["pytest>=7", "biopython>=1.81"]
 dev = ["gpusw[test,pandas]", "ruff>=0.6", "build>=1.2", "twine>=5.0"]
@@ -85,7 +94,12 @@ ignore = ["E741"]  # ambiguous names (i, l) are fine in DP/index code
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]              # inline test fixtures / parametrize ids may be long
 "examples/legacy_16s_gpu_align.py" = ["E501", "E741", "B", "UP", "F"]  # preserved verbatim
+"examples/*16s*.py" = ["E501"]    # driver scripts: long descriptive log/stats strings
+"examples/*bvbrc*.py" = ["E501"]
 
 [tool.pytest.ini_options]
-markers = ["gpu: tests that require a CUDA GPU + CuPy"]
+markers = [
+    "gpu: tests that require a CUDA GPU + CuPy",
+    "metal: tests that require an Apple-Silicon Metal GPU + PyObjC",
+]
 testpaths = ["tests"]

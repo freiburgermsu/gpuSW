@@ -23,8 +23,10 @@ import numpy as np
 
 from . import schemes
 from ._compile import gpu_available
+from ._metal import metal_available
 from ._version import __version__
 from .aligner import Aligner
+from .backends import available_backends
 from .errors import (
     EncodeError,
     GpuSWError,
@@ -50,6 +52,8 @@ __all__ = [
     "cpu_reference_matrix",
     "available_matrices",
     "gpu_available",
+    "metal_available",
+    "available_backends",
     "GpuSWError",
     "NoGpuError",
     "SchemeError",
@@ -115,6 +119,7 @@ def align_score(
     unknown=None,
     dtype=None,
     threads=128,
+    backend="auto",
     return_ids=True,
     query_batch=None,
 ):
@@ -122,6 +127,8 @@ def align_score(
 
     ``queries`` and ``refs`` are funnelled by :func:`gpusw.encode.funnel` — lists of
     strings, dicts, ``(id, seq)`` iterables, FASTA paths/text, or pre-encoded buffers.
+    ``backend`` selects the GPU: ``"auto"`` (prefer CUDA, else Metal), ``"cuda"``, or
+    ``"metal"``.
 
     Returns an :class:`AlignResult` (``.scores`` is ``(n_queries, n_refs)`` int32) by
     default, or a bare ``np.ndarray`` if ``return_ids=False``.
@@ -131,7 +138,7 @@ def align_score(
         gap_extend=gap_extend, matrix=matrix, alphabet=alphabet, unknown=unknown,
         dtype=dtype,
     )
-    al = Aligner(sch, threads=threads).index(refs).set_queries(queries)
+    al = Aligner(sch, threads=threads, backend=backend).index(refs).set_queries(queries)
     return al.score_cross(return_ids=return_ids, query_batch=query_batch)
 
 
@@ -151,20 +158,22 @@ def align_pairs(
     unknown=None,
     dtype=None,
     threads=128,
+    backend="auto",
     return_ids=True,
 ):
     """Score specific query/reference pairs.
 
     With ``pairs=None`` the queries and references are zipped 1:1 (and must be the same
     length). Otherwise ``pairs`` is a list of ``(query_index, reference_index)`` tuples.
-    Returns an :class:`AlignResult` (``.scores`` is ``(n_pairs,)``) or a bare array.
+    ``backend`` selects the GPU (``"auto"`` | ``"cuda"`` | ``"metal"``). Returns an
+    :class:`AlignResult` (``.scores`` is ``(n_pairs,)``) or a bare array.
     """
     sch = _build_scheme(
         scheme, mode=mode, match=match, mismatch=mismatch, gap_open=gap_open,
         gap_extend=gap_extend, matrix=matrix, alphabet=alphabet, unknown=unknown,
         dtype=dtype,
     )
-    al = Aligner(sch, threads=threads).index(refs).set_queries(queries)
+    al = Aligner(sch, threads=threads, backend=backend).index(refs).set_queries(queries)
     nq, nr = al._queries.n, al._refs.n
     if pairs is None:
         if nq != nr:
